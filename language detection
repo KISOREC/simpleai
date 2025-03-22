@@ -1,0 +1,114 @@
+import asyncio
+import speech_recognition as sr
+from langdetect import detect, DetectorFactory
+from gtts import gTTS
+from playsound import playsound
+import os
+import time
+import google.generativeai as genai
+DetectorFactory.seed = 0
+genai.configure(api_key="")
+response_language = "auto"
+context = []  # For maintaining conversation history
+def listen():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("Listening...")
+        recognizer.adjust_for_ambient_noise(source)
+        audio = recognizer.listen(source)
+
+    try:
+        text = recognizer.recognize_google(audio)
+        print(f" You: {text}")
+        return text
+    except sr.UnknownValueError:
+        print("Could not understand audio")
+        return None
+    except sr.RequestError:
+        print(" Speech recognition service error")
+        return None
+def detect_language(text):
+    try:
+        
+        if text.lower() in ["i am fine", "fine", "good", "i'm fine"]:
+            return "en"
+        if text.lower() in ["neram enna", "time", "what is the time"]:
+            return "ta"  # Force Tamil for specific phrases
+        
+        lang = detect(text)
+        print(f"Detected Language: {lang}")
+        return lang
+    except Exception as e:
+        print(f" Language detection error: {e}")
+        return "en"
+async def generate_response(prompt, lang):
+    global context
+    context.append({"role": "user", "content": prompt})
+
+    # Limit context to last 10 exchanges for memory efficiency
+    if len(context) > 10:
+        context = context[-10:]
+
+    try:
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        formatted_context = [{"parts": [{"text": msg["content"]}], "role": msg["role"]} for msg in context]
+
+        response = model.generate_content(formatted_context)
+        reply = response.text
+
+        context.append({"role": "assistant", "content": reply})
+
+        return reply
+    except Exception as e:
+        print(f" AI generation error: {e}")
+        return "Sorry, I couldn't process that."
+def speak(text, lang):
+    try:
+        tts = gTTS(text=text, lang=lang, slow=False)
+        filename = f"response_{time.time()}.mp3"
+        tts.save(filename)
+        playsound(filename)
+        os.remove(filename)
+    except Exception as e:
+        print(f"Speech synthesis error: {e}")
+def change_language(command):
+    global response_language
+    new_lang = command.split("to")[-1].strip()
+    try:
+        detected_lang = detect(new_lang)
+        response_language = detected_lang
+        print(f" Language switched to: {response_language}")
+        speak(f"Language switched to {response_language}", response_language)
+    except Exception as e:
+        print(f" Language switch error: {e}")
+        speak("Failed to switch language", "en")
+def handle_command(command):
+    if "change language to" in command.lower():
+        change_language(command)
+    elif "exit" in command.lower():
+        speak("Goodbye! Have a nice day.", "en")
+        exit()
+    elif "what's the time" in command.lower() or "neram enna" in command.lower():
+        time_now = time.strftime("%I:%M %p")
+        print(f" Current time: {time_now}")
+        speak(f"The current time is {time_now}", "en")
+    elif "clear memory" in command.lower():
+        context.clear()
+        print("Memory cleared.")
+        speak("Memory cleared.", "en")
+async def main():
+    global response_language
+    print(" AI Voice Assistant Started!")
+
+    while True:
+        user_input = listen()
+        if user_input:
+            if any(x in user_input.lower() for x in ["change language to", "exit", "what's the time", "clear memory"]):
+                handle_command(user_input)
+                continue
+            detected_lang = detect_language(user_input)
+            ai_reply = await generate_response(user_input, response_language if response_language != "auto" else detected_lang)
+            print(f" AI: {ai_reply}")
+            speak(ai_reply, response_language if response_language != "auto" else detected_lang)
+if __name__ == "__main__":
+    asyncio.run(main())
