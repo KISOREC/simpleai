@@ -1,0 +1,121 @@
+from flask import Flask, request
+from twilio.rest import Client
+from twilio.twiml.voice_response import VoiceResponse
+import os
+import time
+import speech_recognition as sr
+from gtts import gTTS
+import playsound
+import re
+TWILIO_PHONE_NUMBER = "xxxxxxxxx"  
+HOTEL_PHONE_NUMBER = "xxxxxxxxxx"  
+WHATSAPP_FROM_NUMBER = "xxxxxxxxx"  
+USER_WHATSAPP_NUMBER = "xxxxxxxxx"  
+ACCOUNT_SID = "TWILIO_SID"
+AUTH_TOKEN = "TWILIO_AUTH_TOKEN"
+client = Client(ACCOUNT_SID, AUTH_TOKEN)
+def speak(text, lang="ta"):
+    """Convert text to speech and play"""
+    tts = gTTS(text=text, lang=lang)
+    tts.save("response.mp3")
+    playsound.playsound("response.mp3")
+    os.remove("response.mp3")
+def listen():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print(" சொல்லுங்கள்...")
+        recognizer.adjust_for_ambient_noise(source)
+        audio = recognizer.listen(source)
+    try:
+        response = recognizer.recognize_google(audio, language="ta-IN")  
+        print(f" பயனர்: {response}")
+        return response
+    except sr.UnknownValueError:
+        print(" புரியவில்லை, முடிவை சேமிக்கிறேன்.")
+        return "தெரியவில்லை"
+    except sr.RequestError:
+        print(" இணைய பிரச்சனை! சரிபார்க்கவும்.")
+        speak("இணைய இணைப்பை சரிபார்க்கவும்.")
+        return "தவறான தகவல்"
+speak("வணக்கம்! நான் நிகிதா ஸ்மார்ட் தமிழ் ஏ.ஐ. ஹோட்டல் அறை பதிவு செய்ய உதவலாமா?")
+response = listen().lower()
+if response in ["ஆம்", "ஆமாம்", "yes"]:
+    speak(" எந்த மாநிலத்தில் அறை பதிவு செய்ய விரும்புகிறீர்கள்?")
+    state = listen()
+    speak("எந்த நகரத்தில் அறை பதிவு செய்ய விரும்புகிறீர்கள்?")
+    city = listen()
+    speak(" எத்தனை நாட்கள் இருக்க விரும்புகிறீர்கள்?")
+    days = listen()
+    speak(" எத்தனை பேர் இருக்கிறீர்கள்?")
+    guests = listen()
+    speak(" உங்கள் தொடர்பு எண்ணை கூறுங்கள்.")
+    contact_number = listen()  
+    speak(" நான் மதிப்பீடுகளின் அடிப்படையில் ஓட்டலைத் தொடர்பு கொள்ளவா, அல்லது ஒரு குறிப்பிட்ட ஓட்டலை அழைக்கவா?")
+    contact_type = listen()
+    print(f"State: {state}, City: {city}, Days: {days}, Guests: {guests}, Contact: {contact_number}, Contact Type: {contact_type}")
+    def call_hotel():
+        response = VoiceResponse()
+        response.say(f"Hello, I am Nikita, an AI assistant calling for a customer inquiry. "
+                     f"The customer wants to book {guests} rooms for {days} days in {city}, {state}. "
+                     f"Their contact number is {contact_number}. Kindly note these details. "
+                     "I will now ask a few questions about room availability.", voice="alice")
+        response.pause(length=3)
+        response.say("How many rooms are currently available?")
+        response.record(max_length=15, play_beep=True)
+        response.pause(length=2)
+        response.say("What are the check-in and check-out times?")
+        response.record(max_length=15, play_beep=True)
+        response.pause(length=2)
+        response.say("What is the cost per room per night?")
+        response.record(max_length=15, play_beep=True)
+        response.pause(length=2)
+        response.say("Is complimentary breakfast available?")
+        response.record(max_length=15, play_beep=True)
+        response.pause(length=2)
+        response.say("Thank you for the information. Goodbye!")
+        return str(response)
+    def make_call():
+        call = client.calls.create(
+            twiml=call_hotel(),
+            to=HOTEL_PHONE_NUMBER,
+            from_=TWILIO_PHONE_NUMBER,
+            record=True  
+        )
+        print(f" Calling hotel... Call SID: {call.sid}")
+        return call.sid
+    def get_call_recording(call_sid):
+        print(" Waiting for call recording...")
+        time.sleep(15) 
+        for _ in range(6):  
+            call_details = client.calls(call_sid).fetch()
+            recordings = call_details.recordings.list()
+            if recordings:
+                recording_url = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+                print(f" Call recording available: {recording_url}")
+                return recording_url
+            time.sleep(5)
+        print(" No recording found.")
+        return None
+    def send_whatsapp_message(body):
+        message = client.messages.create(
+            from_=WHATSAPP_FROM_NUMBER,
+            to=USER_WHATSAPP_NUMBER,
+            body=body
+        )
+        print(f"WhatsApp Message Sent: {message.sid}")
+    call_sid = make_call()
+    recording_url = get_call_recording(call_sid)
+    if recording_url:
+        message_body = (
+            f" *Hotel Booking Information*\n\n"
+            f" *Call Recording:* {recording_url}\n\n"
+            "Reply with:\n"
+            "*confirm* - To confirm booking\n"
+            "*cancel* - To cancel"
+        )
+        send_whatsapp_message(message_body)
+    else:
+        print(" No recording available, skipping WhatsApp message.")
+
+else:
+    speak("சரி! தேவைப்பட்டால் என்னை அழைக்கலாம். நன்றி!")
