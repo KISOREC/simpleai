@@ -1,0 +1,146 @@
+from flask import Flask, request
+from twilio.rest import Client
+from twilio.twiml.voice_response import VoiceResponse
+import os
+import time
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TWILIO_PHONE_NUMBER = "xxxxxxxxxxxxxxxxxx" 
+WHATSAPP_FROM_NUMBER = "xxxxxxxxxxxxxxxxx"  
+USER_WHATSAPP_NUMBER = "xxxxxxxxxxxxxxxxx"  
+HOTEL_PHONE_NUMBER = "xxxxxxxxxxxxxxxxxxx"  
+
+ACCOUNT_SID = os.getenv("TWILIO_SID")
+AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+
+client = Client(ACCOUNT_SID, AUTH_TOKEN)
+
+app = Flask(__name__)
+
+
+rooms_needed = input(" How many rooms do you need? ")
+
+def call_hotel():
+    response = VoiceResponse()
+    
+    response.say("Hello, I am calling on behalf of a customer. "
+                 "I have a few questions regarding room availability. "
+                 "Your responses will be recorded, so please answer clearly. "
+                 "I will ask you one question at a time and wait for your response. "
+                 "Let’s begin.", voice="alice")
+
+    response.pause(length=3)
+    response.say("How many rooms are currently available?")
+    response.record(max_length=15, play_beep=True)
+
+    response.pause(length=2)
+    response.say("What are the check-in and check-out times?")
+    response.record(max_length=15, play_beep=True)
+
+    response.pause(length=2)
+    response.say("What is the cost per room per night?")
+    response.record(max_length=15, play_beep=True)
+
+    response.pause(length=2)
+    response.say("Thank you for the information. Goodbye!")
+
+    return str(response)
+
+@app.route("/voice", methods=["POST"])
+def voice():
+    return call_hotel()
+
+def make_call():
+    """Call the hotel and record the responses."""
+    call = client.calls.create(
+        twiml=call_hotel(),
+        to=HOTEL_PHONE_NUMBER,
+        from_=TWILIO_PHONE_NUMBER,
+        record=True 
+    )
+    print(f" Calling hotel... Call SID: {call.sid}")
+    return call.sid
+
+def get_call_recording(call_sid):
+    print(" Waiting for call recording...")
+    time.sleep(15)  
+
+    for _ in range(6):  # Retry 6 times (total wait = ~30 seconds)
+        call_details = client.calls(call_sid).fetch()
+        recordings = call_details.recordings.list()
+        if recordings:
+            recording_url = f"https://api.twilio.com{recordings[0].uri.replace('.json', '.mp3')}"
+            print(f" Call recording available: {recording_url}")
+            return recording_url
+        time.sleep(5)
+
+    print(" No recording found.")
+    return None
+
+def send_whatsapp_message(body):
+    """ Send WhatsApp message to user."""
+    message = client.messages.create(
+        from_=WHATSAPP_FROM_NUMBER,
+        to=USER_WHATSAPP_NUMBER,
+        body=body
+    )
+    print(f" WhatsApp Message Sent: {message.sid}")
+
+def send_booking_info(recording_url):
+    message_body = (
+        f" *Hotel Booking Information*\n\n"
+        f" *Call Recording:* {recording_url}\n\n"
+        "Reply with:\n"
+        "*confirm* - To confirm booking\n"
+        "*cancel* - To cancel"
+    )
+    send_whatsapp_message(message_body)
+
+@app.route("/whatsapp", methods=["POST"])
+def whatsapp_reply():
+    
+    incoming_msg = request.values.get("Body", "").strip().lower()
+
+    if incoming_msg == "confirm":
+        make_confirmation_call()
+        send_whatsapp_message(" Booking Confirmed! The hotel has been informed.")
+        return "Booking Confirmed!", 200
+
+    elif incoming_msg == "cancel":
+        send_whatsapp_message(" Booking Canceled! Let me know if you need anything else.")
+        return " Booking Canceled!", 200
+
+    else:
+        send_whatsapp_message(" Invalid response. Reply *confirm* or *cancel*")
+        return "Invalid response", 200
+def confirm_booking():
+   
+    response = VoiceResponse()
+    response.say(
+        f"Hello, I am calling to confirm a booking for {rooms_needed} rooms. "
+        f"The guest will arrive as per the check-in details. "
+        f"The guest’s contact number is {USER_WHATSAPP_NUMBER}. Thank you!"
+    )
+    return str(response)
+
+def make_confirmation_call():
+    call = client.calls.create(
+        twiml=confirm_booking(),
+        to=HOTEL_PHONE_NUMBER,
+        from_=TWILIO_PHONE_NUMBER
+    )
+    print(f" Calling hotel to confirm... Call SID: {call.sid}")
+
+
+call_sid = make_call()
+recording_url = get_call_recording(call_sid)
+
+if recording_url:
+    send_booking_info(recording_url)  
+else:
+    print(" No recording available, skipping WhatsApp message.")
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
